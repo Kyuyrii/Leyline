@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=Leyline
+Exec=leyline
+Icon=io.github.kyuyrii.leyline
+StartupWMClass=io.github.kyuyrii.leyline
+Categories=Utility;
+Keywords=snap;desktop;shortcut;
+Type=Application
+StartupNotify=false
+Terminal=false

@@ -1,0 +1,614 @@
+#!/usr/bin/env python3
+# -*- coding: UTF-8 -*-
+
+import sys
+import os
+import locale
+import toml
+import shutil
+import re
+from pathlib import Path
+from functools import partial
+
+try:
+    locale.setlocale(locale.LC_ALL, '')
+    LANG, _ = locale.getlocale(locale.LC_CTYPE)
+except locale.Error:
+    LANG = 'en'
+
+if not LANG:
+    LANG = 'en'
+
+__version__ = "0.1"
+__creator__ = "<a href='https://github.com/Kyuyrii'>Kyuyrii</a>"
+
+TRANSLATIONS = {
+    'en': {
+        'APP_NAME': f"Leyline v{__version__}",
+        'SEARCH': "Search",
+        'SELECT_ALL': "All",
+        'DESELECT_ALL': "None",
+        'SNAP_FOLDER': "snap folder",
+        'DOT_LOCAL_FOLDER': ".local folder",
+        'BROWSE': "Browse",
+        'PATHS': "Paths",
+        'UPDATE_SHORTCUTS': "Update shortcuts",
+        'SHOW_HIDE': "Change visibility",
+        'QUIT': "Quit",
+        'PATHS_INFO': "Use the 'Browse' button for each location and select the actual '.local' and 'snap' folders.",
+        'SNAP_FOLDER_NOT_FOUND': "Snap folder not found",
+        'ERROR_CREATING_PATH': "Error creating folder",
+        'ERROR_REMOVING_FILE': "Error removing file",
+        'ERROR_COPYING_FILE': "Error copying file",
+        'SELECT_FOLDER': "Select folder",
+        'CREATED_SHORTCUT': "Created: {}",
+        'REMOVED_SHORTCUT': "Removed: {}",
+        'NO_CHANGES': "Nothing to be done",
+        'SHORTCUTS_UPDATED': "Shortcuts updated",
+    },
+    'pt': {
+        'APP_NAME': f"Leyline v{__version__}",
+        'SEARCH': "Pesquisar",
+        'SELECT_ALL': "Selecionar todos",
+        'DESELECT_ALL': "Desmarcar todos",
+        'SNAP_FOLDER': "Pasta snap",
+        'DOT_LOCAL_FOLDER': "Pasta .local",
+        'BROWSE': "Procurar",
+        'PATHS': "Caminhos",
+        'UPDATE_SHORTCUTS': "Atualizar atalhos",
+        'SHOW_HIDE': "Alterar visibilidade",
+        'QUIT': "Sair",
+        'PATHS_INFO': "Use o botão 'Procurar' para cada local e selecione as pastas '.local' e 'snap' reais.",
+        'SNAP_FOLDER_NOT_FOUND': "Pasta Snap não encontrada",
+        'ERROR_CREATING_PATH': "Erro ao criar pasta",
+        'ERROR_REMOVING_FILE': "Erro ao remover arquivo",
+        'ERROR_COPYING_FILE': "Erro ao copiar arquivo",
+        'SELECT_FOLDER': "Selecionar pasta",
+        'CREATED_SHORTCUT': "Criado: {}",
+        'REMOVED_SHORTCUT': "Removido: {}",
+        'NO_CHANGES': "Nada a fazer",
+        'SHORTCUTS_UPDATED': "Atalhos atualizados",
+    },
+    'es': {
+        'APP_NAME': f"Leyline v{__version__}",
+        'SEARCH': "Buscar",
+        'SELECT_ALL': "Todo",
+        'DESELECT_ALL': "Ninguno",
+        'SNAP_FOLDER': "Carpeta snap",
+        'DOT_LOCAL_FOLDER': "Carpeta .local",
+        'BROWSE': "Examinar",
+        'PATHS': "Rutas",
+        'UPDATE_SHORTCUTS': "Actualizar accesos",
+        'SHOW_HIDE': "Cambiar la visibilidad",
+        'QUIT': "Salir",
+        'PATHS_INFO': "Utilice el botón 'Examinar' para cada ubicación y seleccione las carpetas '.local' y 'snap'.",
+        'SNAP_FOLDER_NOT_FOUND': "Carpeta Snap no encontrada",
+        'ERROR_CREATING_PATH': "Error al crear carpeta",
+        'ERROR_REMOVING_FILE': "Error al eliminar archivo",
+        'ERROR_COPYING_FILE': "Error al copiar archivo",
+        'SELECT_FOLDER': "Seleccionar carpeta",
+        'CREATED_SHORTCUT': "Creado: {}",
+        'REMOVED_SHORTCUT': "Eliminado: {}",
+        'NO_CHANGES': "No hay nada que hacer",
+        'SHORTCUTS_UPDATED': "Accesos actualizados",
+    }
+}
+
+def tr(key, **kwargs):
+    main_lang = LANG.split('_')[0] if LANG else 'en'
+    translation_dict = TRANSLATIONS.get(main_lang, TRANSLATIONS['en'])
+    translated_string = translation_dict.get(key, TRANSLATIONS['en'].get(key, key))
+    return translated_string.format(**kwargs) if kwargs else translated_string
+
+try:
+    from PyQt6.QtWidgets import (
+        QApplication, QMainWindow, QWidget, QVBoxLayout, QPushButton, 
+        QMessageBox, QLabel, QLineEdit, QHBoxLayout, QFileDialog, QCheckBox, 
+        QScrollArea, QSystemTrayIcon, QMenu, QGridLayout)
+    from PyQt6.QtCore import Qt, QSize, QTranslator, QLibraryInfo
+    from PyQt6.QtGui import QAction, QIcon
+    from PyQt6.QtNetwork import QLocalServer, QLocalSocket
+    print("Using PyQt6")
+except ImportError:
+    print("PyQt6 not found")
+    sys.exit(1)
+
+leyline_dir = Path.home() / "App" / "Leyline"
+home_dir = Path.home()
+
+leyline_config_dir = leyline_dir / "config"
+leyline_settings_file = leyline_config_dir / "leyline-settings.toml"
+
+def detect_default_settings() -> dict:
+    return {
+        "window": {
+            "isMaximized": False,
+            "windowSize": [480, 600],
+        },
+        "paths": {
+            "snap_dir": str(Path.home() / "snap"),
+            "dot_local_dir": str(Path.home() / ".local"),
+        },
+        "chosen_snaps": [],
+    }
+
+def load_settings() -> dict:
+    defaults = detect_default_settings()
+
+    try:
+        with open(leyline_settings_file, "r", encoding="utf-8") as f:
+            data = toml.load(f)
+    except Exception:
+        save_settings(defaults)
+        return defaults
+
+    for key, value in defaults.items():
+        if key not in data:
+            data[key] = value
+        elif isinstance(value, dict):
+            for subkey, subvalue in value.items():
+                if subkey not in data[key]:
+                    data[key][subkey] = subvalue
+
+    return data
+
+def save_settings(data: dict) -> None:
+    leyline_config_dir.mkdir(parents=True, exist_ok=True)
+    with open(leyline_settings_file, "w", encoding="utf-8") as f:
+        toml.dump(data, f)
+
+class Leyline(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        settings = load_settings()
+
+        size = settings["window"].get("windowSize")
+        if size and isinstance(size, list) and len(size) == 2:
+            self.resize(QSize(size[0], size[1]))
+        else:
+            self.resize(300, 300)
+
+        self.setMinimumSize(300, 400)
+        self.setWindowTitle(tr('APP_NAME'))
+
+        local_icons = ['io.github.kyuyrii.leyline.svg', '/snap/leyline/current/meta/gui/icon.svg']
+
+        icon_set = False
+        for icon_file in local_icons:
+            if Path(icon_file).exists():
+                self.setWindowIcon(QIcon(icon_file))
+                icon_set = True
+                break
+        if not icon_set:
+            icon = QIcon.fromTheme('io.github.kyuyrii.leyline')
+            if not icon.isNull():
+                self.setWindowIcon(icon)
+
+        leyline_config_dir.mkdir(parents=True, exist_ok=True)
+
+        self.snap_dir = Path(settings["paths"].get("snap_dir", str(Path.home() / "snap")))
+        self.dot_local_dir = Path(settings["paths"].get("dot_local_dir", str(Path.home() / ".local")))
+        self.apps_dir = self.dot_local_dir / "share" / "applications"
+        self.chosen_snaps = settings.get("chosen_snaps", [])
+
+        self.snaps = []
+        self.checkbox_widgets = {}
+
+        self.central_widget = QWidget()
+        self.setCentralWidget(self.central_widget)
+        self.main_layout = QVBoxLayout()
+        self.central_widget.setLayout(self.main_layout)
+
+        self.search_bar = QLineEdit()
+        self.search_bar.setPlaceholderText(tr('SEARCH'))
+        self.search_bar.textChanged.connect(self.filter_snaps)
+        self.main_layout.addWidget(self.search_bar)
+
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_content = QWidget()
+        self.scroll_layout = QVBoxLayout(self.scroll_content)
+        self.scroll_layout.setContentsMargins(6, 6, 6, 6)
+        self.scroll_layout.setSpacing(4)
+        self.scroll_content.setLayout(self.scroll_layout)
+        self.scroll_area.setWidget(self.scroll_content)
+        self.main_layout.addWidget(self.scroll_area)
+
+        select_layout = QHBoxLayout()
+        self.select_all_btn = QPushButton(tr('SELECT_ALL'))
+        self.select_all_btn.clicked.connect(self.select_all_checkboxes)
+        self.deselect_all_btn = QPushButton(tr('DESELECT_ALL'))
+        self.deselect_all_btn.clicked.connect(self.deselect_all_checkboxes)
+        select_layout.addWidget(self.select_all_btn)
+        select_layout.addWidget(self.deselect_all_btn)
+        self.main_layout.addLayout(select_layout)
+
+        self.locations_widget = QWidget()
+        grid = QGridLayout(self.locations_widget)
+
+        grid.addWidget(QLabel(tr('SNAP_FOLDER')), 0, 0)
+        self.snap_dir_input = QLineEdit(str(self.snap_dir))
+        grid.addWidget(self.snap_dir_input, 1, 0, 1, 3)
+
+        snap_buttons = QHBoxLayout()
+        snap_browse = QPushButton(tr('BROWSE'))
+        snap_browse.clicked.connect(partial(self.browse_folder, self.snap_dir_input))
+        snap_buttons.addWidget(snap_browse)
+        grid.addLayout(snap_buttons, 2, 0, 1, 3)
+
+        grid.addWidget(QLabel(tr('DOT_LOCAL_FOLDER')), 3, 0)
+        self.dot_local_dir_input = QLineEdit(str(self.dot_local_dir))
+        grid.addWidget(self.dot_local_dir_input, 4, 0, 1, 3)
+
+        local_buttons = QHBoxLayout()
+        local_browse = QPushButton(tr('BROWSE'))
+        local_browse.clicked.connect(partial(self.browse_folder, self.dot_local_dir_input))
+        local_buttons.addWidget(local_browse)
+        grid.addLayout(local_buttons, 5, 0, 1, 3)
+
+        grid.setContentsMargins(0, 0, 0, 0)
+        self.locations_widget.setLayout(grid)
+        self.locations_widget.hide()
+        self.main_layout.addWidget(self.locations_widget)
+
+        buttons_layout = QHBoxLayout()
+        
+        self.locations_btn = QPushButton(tr('PATHS'))
+        self.locations_btn.clicked.connect(self.toggle_locations)
+        buttons_layout.addWidget(self.locations_btn)
+
+        self.info_btn = QPushButton()
+        self.info_btn.setIcon(QIcon.fromTheme("help-about"))
+        self.info_btn.clicked.connect(self.show_info)
+        buttons_layout.addWidget(self.info_btn)
+
+        buttons_layout.addStretch()
+        
+        self.update_btn = QPushButton(tr('UPDATE_SHORTCUTS'))
+        self.update_btn.clicked.connect(self.update_shortcuts)
+        buttons_layout.addWidget(self.update_btn)
+        
+        self.main_layout.addLayout(buttons_layout)
+
+        # System Tray
+        self.tray_icon = QSystemTrayIcon(self)
+        self.tray_icon.setIcon(self.windowIcon())
+        self.tray_icon.setToolTip(self.windowTitle())
+
+        self.tray_menu = QMenu()
+
+        self.tray_update = QAction(tr('UPDATE_SHORTCUTS'), self)
+        self.tray_update.triggered.connect(self.update_shortcuts)
+        self.tray_menu.addAction(self.tray_update)
+
+        self.toggle_action = QAction(tr('SHOW_HIDE'), self)
+        self.toggle_action.triggered.connect(self.toggle_window)
+        self.tray_menu.addAction(self.toggle_action)
+
+        self.tray_menu.addSeparator()
+
+        self.quit_action = QAction(tr('QUIT'), self)
+        self.quit_action.triggered.connect(self.close)
+        self.tray_menu.addAction(self.quit_action)
+
+        self.tray_icon.setContextMenu(self.tray_menu)
+        self.tray_icon.show()
+
+        self.scan_snaps()
+
+        if settings["window"].get("isMaximized", False):
+            self.showMaximized()
+        else:
+            self.show()
+
+    def toggle_window(self):
+        if self.isVisible():
+            self.hide()
+        else:
+            self.show()
+            self.raise_()
+            self.activateWindow()
+
+    def toggle_locations(self):
+        self.locations_widget.setVisible(not self.locations_widget.isVisible())
+
+    def browse_folder(self, line_edit):
+        folder = QFileDialog.getExistingDirectory(self, tr('SELECT_FOLDER'), str(home_dir))
+        if folder:
+            line_edit.setText(folder)
+            if line_edit == self.dot_local_dir_input:
+                self.dot_local_dir = Path(folder)
+                self.apps_dir = self.dot_local_dir / "share" / "applications"
+            if line_edit == self.snap_dir_input:
+                self.scan_snaps()
+
+    def show_info(self):
+        QMessageBox.information(
+            self,
+            tr('APP_NAME'),
+            tr('PATHS_INFO')
+        )
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            return
+        super().keyPressEvent(event)
+
+    def closeEvent(self, event):
+        settings = load_settings()
+        settings["window"]["windowSize"] = [self.size().width(), self.size().height()]
+        settings["window"]["isMaximized"] = self.isMaximized()
+        
+        settings["paths"]["snap_dir"] = self.snap_dir_input.text()
+        settings["paths"]["dot_local_dir"] = self.dot_local_dir_input.text()
+        
+        chosen_snaps = []
+        for snap_name, cb in self.checkbox_widgets.items():
+            if cb.isChecked():
+                chosen_snaps.append(snap_name)
+        settings["chosen_snaps"] = chosen_snaps
+        
+        save_settings(settings)
+        QApplication.quit()
+
+    def is_leyline_shortcut(self, file_path: Path) -> bool:
+        if not file_path.exists() or file_path.suffix != ".desktop":
+            return False
+        return file_path.name.startswith("leyline-")
+
+    def scan_snaps(self):
+        snap_dir = Path(self.snap_dir_input.text())
+        self.snaps = []
+
+        if snap_dir.exists():
+            for item in snap_dir.iterdir():
+                if item.is_dir() and not item.name.startswith('.'):
+                    if (item / "current").exists() or (item / "common").exists():
+                        self.snaps.append(item.name)
+
+            self.snaps.sort()
+
+        while self.scroll_layout.count():
+            item = self.scroll_layout.takeAt(0)
+            if item.widget():
+                item.widget().setParent(None)
+
+        self.checkbox_widgets = {}
+        for snap in self.snaps:
+            cb = QCheckBox(snap)
+            cb.setChecked(snap in self.chosen_snaps)
+            self.checkbox_widgets[snap] = cb
+            self.scroll_layout.addWidget(cb)
+
+        self.scroll_layout.addStretch()
+
+    def filter_snaps(self, text):
+        text = text.lower()
+        for snap, cb in self.checkbox_widgets.items():
+            cb.setVisible(text in snap.lower())
+
+    def select_all_checkboxes(self):
+        for cb in self.checkbox_widgets.values():
+            if cb.isVisible():
+                cb.setChecked(True)
+
+    def deselect_all_checkboxes(self):
+        for cb in self.checkbox_widgets.values():
+            if cb.isVisible():
+                cb.setChecked(False)
+
+    def find_desktop_files(self, snap_name: str, snap_path: Path):
+        desktop_files = []
+        
+        current_apps = snap_path / "current" / ".local" / "share" / "applications"
+        if current_apps.exists() and not current_apps.is_symlink():
+            desktop_files.extend(current_apps.glob("*.desktop"))
+        
+        common_apps = snap_path / "common" / ".local" / "share" / "applications"
+        if common_apps.exists() and not common_apps.is_symlink():
+            desktop_files.extend(common_apps.glob("*.desktop"))
+        
+        return desktop_files
+
+    def modify_desktop_file(self, content: str, snap_name: str) -> str:
+        lines = content.split('\n')
+        modified_lines = []
+        snap_run_pattern = f"snap run {snap_name}"
+        snap_bin_path = f"/snap/bin/{snap_name}"
+        
+        for line in lines:
+            if line.startswith('Exec='):
+                exec_part = line[5:]
+
+                if exec_part.strip().startswith(snap_run_pattern):
+                    modified_lines.append(line)
+                else:
+                    parts = exec_part.split(' ', 1)
+                    if len(parts) > 1:
+                        modified_lines.append(f"Exec={snap_run_pattern} {parts[1]}")
+                    else:
+                        modified_lines.append(f"Exec={snap_run_pattern}")
+            
+            elif line.startswith('TryExec='):
+                try_part = line[8:]
+
+                if try_part.strip() == snap_bin_path:
+                    modified_lines.append(line)
+                else:
+                    modified_lines.append(f"TryExec={snap_bin_path}")
+            
+            else:
+                modified_lines.append(line)
+        
+        return '\n'.join(modified_lines)
+
+    def update_shortcuts(self):
+        snap_dir = Path(self.snap_dir_input.text())
+        dot_local_dir = Path(self.dot_local_dir_input.text())
+        apps_dir = dot_local_dir / "share" / "applications"
+
+        if not snap_dir.exists():
+            print(tr('SNAP_FOLDER_NOT_FOUND'))
+            QMessageBox.critical(self, tr('APP_NAME'), tr('SNAP_FOLDER_NOT_FOUND'))
+            return
+
+        try:
+            apps_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            print(tr('ERROR_CREATING_PATH'))
+            QMessageBox.critical(self, tr('APP_NAME'), tr('ERROR_CREATING_PATH'))
+            return
+
+        selected_snaps = set()
+        for snap_name, cb in self.checkbox_widgets.items():
+            if cb.isChecked():
+                selected_snaps.add(snap_name)
+
+        valid_shortcuts = set()
+        created_files = []
+        removed_files = []
+
+        for snap_name in selected_snaps:
+            snap_path = snap_dir / snap_name
+            
+            for location in ['current', 'common']:
+                apps_path = snap_path / location / ".local" / "share" / "applications"
+                if apps_path.exists() and not apps_path.is_symlink():
+                    for desktop_file in apps_path.glob("*.desktop"):
+                        try:
+                            with open(desktop_file, 'r', encoding='utf-8') as f:
+                                content = f.read()
+                            
+                            skip_file = False
+                            for line in content.split('\n'):
+                                if line.startswith('Exec=') and 'env' in line:
+                                    skip_file = True
+                                    break
+                            
+                            if skip_file:
+                                continue
+                            
+                            new_name = f"leyline-{snap_name}-{desktop_file.name}"
+                            valid_shortcuts.add(new_name)
+                            dest_path = apps_dir / new_name
+                            
+                            needs_update = True
+                            if dest_path.exists():
+                                try:
+                                    with open(dest_path, 'r', encoding='utf-8') as f:
+                                        existing_content = f.read()
+                                    modified_content = self.modify_desktop_file(content, snap_name)
+                                    if existing_content == modified_content:
+                                        needs_update = False
+                                except Exception:
+                                    pass
+                            
+                            if needs_update:
+                                modified_content = self.modify_desktop_file(content, snap_name)
+                                with open(dest_path, 'w', encoding='utf-8') as f:
+                                    f.write(modified_content)
+                                created_files.append(new_name)
+                                
+                        except Exception as e:
+                            print(tr('ERROR_COPYING_FILE'))
+                            QMessageBox.critical(self, tr('APP_NAME'), tr('ERROR_COPYING_FILE'))
+
+        for f in apps_dir.glob("leyline-*.desktop"):
+            if f.name not in valid_shortcuts:
+                try:
+                    f.unlink()
+                    removed_files.append(f.name)
+                except Exception as e:
+                    print(tr('ERROR_REMOVING_FILE'))
+                    QMessageBox.critical(self, tr('APP_NAME'), tr('ERROR_REMOVING_FILE'))
+
+        for f in apps_dir.glob("io.github.kyuyrii.leyline-*.desktop"):
+            try:
+                f.unlink()
+                removed_files.append(f.name)
+            except Exception as e:
+                print(tr('ERROR_REMOVING_FILE'))
+                QMessageBox.critical(self, tr('APP_NAME'), tr('ERROR_REMOVING_FILE'))
+
+        if created_files:
+            for file in sorted(created_files):
+                print(tr('CREATED_SHORTCUT').format(file))
+        
+        if removed_files:
+            for file in sorted(removed_files):
+                print(tr('REMOVED_SHORTCUT').format(file))
+        
+        if not created_files and not removed_files:
+            print(tr('NO_CHANGES'))
+            QMessageBox.information(self, tr('APP_NAME'), tr('NO_CHANGES'))
+        else:
+            QMessageBox.information(self, tr('APP_NAME'), tr('SHORTCUTS_UPDATED'))
+
+        self.chosen_snaps = list(selected_snaps)
+
+if __name__ == "__main__":
+    settings = load_settings()
+    app = QApplication(sys.argv)
+
+    translator = QTranslator()
+    user_locale = LANG
+    translations_path = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
+
+    if translator.load(f"qt_{user_locale}", translations_path):
+        app.installTranslator(translator)
+
+    app_id = "io.github.kyuyrii.leyline"
+    app.setDesktopFileName(app_id)
+
+    def send_to_running_instance(message: str) -> bool:
+        socket = QLocalSocket()
+        socket.connectToServer("io.github.kyuyrii.leyline")
+        if socket.waitForConnected(300):
+            socket.write(message.encode("utf-8"))
+            socket.flush()
+            socket.waitForBytesWritten(300)
+            socket.disconnectFromServer()
+            return True
+        return False
+
+    def handle_new_connection():
+        socket = window.server.nextPendingConnection()
+        if not socket.waitForReadyRead(1000):
+            socket.disconnectFromServer()
+            return
+        data = socket.readAll().data().decode("utf-8").strip()
+
+        if data == "--heartbeat":
+            socket.write(b"alive")
+            socket.flush()
+            socket.waitForBytesWritten(300)
+            socket.disconnectFromServer()
+            return
+
+        socket.disconnectFromServer()
+
+    def is_instance_alive() -> bool:
+        socket = QLocalSocket()
+        socket.connectToServer("io.github.kyuyrii.leyline")
+        if socket.waitForConnected(300):
+            socket.write(b"--heartbeat")
+            socket.flush()
+            if socket.waitForReadyRead(300):
+                response = socket.readAll().data().decode("utf-8").strip()
+                socket.disconnectFromServer()
+                if response == "alive":
+                    return True
+        QLocalServer.removeServer("io.github.kyuyrii.leyline")
+        return False
+
+    if is_instance_alive():
+        sys.exit(0)
+
+    window = Leyline()
+
+    window.server_name = "io.github.kyuyrii.leyline"
+    window.server = QLocalServer(window)
+    window.server.listen(window.server_name)
+    window.server.newConnection.connect(handle_new_connection)
+
+    sys.exit(app.exec())

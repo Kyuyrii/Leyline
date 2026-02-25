@@ -1,0 +1,44 @@
+name: leyline
+base: core24
+version: '0.1'
+platforms:
+  amd64:
+    build-on: [amd64]
+    build-for: [amd64]
+  arm64:
+    build-on: [arm64]
+    build-for: [arm64]
+summary: A .desktop file copier for Snap applications.
+description: |
+ Leyline lets you copy the .desktop files that Snap apps create into their own folders.
+ It sends them to the actual applications folder.
+ And it changes the commands to call the Snap app from where the .desktop file came from.
+grade: stable
+confinement: strict
+icon: io.github.kyuyrii.leyline.svg
+
+apps:
+  leyline:
+    command: leyline
+    desktop: io.github.kyuyrii.leyline.desktop
+    common-id: io.github.kyuyrii.leyline
+    environment:
+      PYTHONPATH: $SNAP/usr/lib/python3/dist-packages:$PYTHONPATH
+      QT_QPA_PLATFORMTHEME: xdgdesktopportal
+      LD_LIBRARY_PATH: $SNAP/lxqt-support/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR:$LD_LIBRARY_PATH
+      QT_PLUGIN_PATH: $SNAP/lxqt-support/usr/lib/$CRAFT_ARCH_TRIPLET_BUILD_FOR/qt6/plugins:$QT_PLUGIN_PATH
+    extensions: [kde-neon-6]
+
+parts:
+  leyline-app:
+    plugin: dump
+    source: https://github.com/Kyuyrii/Leyline.git
+    source-tag: $SNAPCRAFT_PROJECT_VERSION
+
+  base-dependencies:
+    plugin: nil
+    stage-packages:
+      - python3-pyqt6
+      - python3-toml
+    prime:
+      - usr/lib/python3/dist-packages
